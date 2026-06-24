@@ -1,0 +1,153 @@
+# =========================
+# MOVIE RECOMMENDATION SYSTEM
+# =========================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.model_selection import train_test_split
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics import mean_squared_error
+
+# =========================
+# STEP 1: LOAD DATA
+# =========================
+
+movies = pd.read_csv("movies.csv")
+ratings = pd.read_csv("ratings.csv")
+
+# =========================
+# STEP 2: MERGE DATA
+# =========================
+
+df = ratings.merge(movies, on="movieId")
+
+df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+df["year"] = df["timestamp"].dt.year
+
+# =========================
+# STEP 3: QUICK EDA
+# =========================
+
+sns.histplot(df["rating"], bins=10)
+plt.title("Rating Distribution")
+plt.show()
+
+# =========================
+# STEP 4: TRAIN-TEST SPLIT
+# =========================
+
+train, test = train_test_split(df, test_size=0.2, random_state=42)
+
+# =========================
+# STEP 5: USER-MOVIE MATRIX
+# =========================
+
+user_movie = train.pivot_table(
+    index="userId",
+    columns="movieId",
+    values="rating"
+)
+
+user_filled = user_movie.fillna(0)
+
+# =========================
+# STEP 6: SIMILARITY
+# =========================
+
+user_similarity = cosine_similarity(user_filled)
+
+user_sim_df = pd.DataFrame(
+    user_similarity,
+    index=user_movie.index,
+    columns=user_movie.index
+)
+
+# =========================
+# STEP 7: PREDICTION FUNCTION
+# =========================
+
+def predict_rating(user_id, movie_id):
+
+    if user_id not in user_movie.index:
+        return np.nan
+
+    if movie_id not in user_movie.columns:
+        return np.nan
+
+    sim_users = user_sim_df[user_id]
+
+    weighted_sum = 0
+    sim_sum = 0
+
+    for other_user in user_movie.index:
+
+        if other_user == user_id:
+            continue
+
+        rating = user_movie.loc[other_user, movie_id]
+
+        if not np.isnan(rating):
+            sim = sim_users[other_user]
+            weighted_sum += sim * rating
+            sim_sum += abs(sim)
+
+    if sim_sum == 0:
+        return np.nan
+
+    return weighted_sum / sim_sum
+
+# =========================
+# STEP 8: RMSE EVALUATION
+# =========================
+
+
+train_values = user_movie.values
+filled_values = user_filled.values
+
+mask = ~np.isnan(train_values)
+
+actual = train_values[mask]
+predicted = filled_values[mask]
+
+rmse = np.sqrt(mean_squared_error(actual, predicted))
+
+print("RMSE:", rmse)
+
+# =========================
+# STEP 9: CONTENT-BASED MODEL
+# =========================
+
+movie_data = movies.copy()
+
+movie_data["genres"] = movie_data["genres"].str.replace("|", " ", regex=False)
+
+tfidf = TfidfVectorizer(stop_words="english")
+tfidf_matrix = tfidf.fit_transform(movie_data["genres"])
+
+cosine_sim = cosine_similarity(tfidf_matrix)
+
+indices = pd.Series(movie_data.index, index=movie_data["title"])
+
+def recommend(title, n=10):
+
+    if title not in indices:
+        return "Movie not found"
+
+    idx = indices[title]
+
+    scores = list(enumerate(cosine_sim[idx]))
+    scores = sorted(scores, key=lambda x: x[1], reverse=True)[1:n+1]
+
+    movie_idx = [i[0] for i in scores]
+
+    return movie_data.iloc[movie_idx][["title", "genres"]]
+
+# =========================
+# TEST
+# =========================
+
+print(recommend("Toy Story (1995)"))
